@@ -4,6 +4,7 @@ import plc.project.lexer.Token;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -30,304 +31,393 @@ public final class Parser {
     }
 
     public Ast.Source parseSource() throws ParseException {
-        throw new ParseException("TODO");
+        List<Ast.Stmt> results = new ArrayList<>(); //list to store the results
+
+        while(tokens.has(0)){ //goes until there are no statements left
+            results.add(parseStmt());
+
+        }
+        return new Ast.Source(results); //returns the results
     }
 
     public Ast.Stmt parseStmt() throws ParseException {
-        if(tokens.peek("LET")){
+        if(tokens.match("LET")){ //checks for let statement
             return parseLetStmt();
-        } else if(tokens.peek("DEF")){
+        } else if(tokens.match("DEF")){ //checks for def statement
             return parseDefStmt();
-        } else if(tokens.peek("IF")){
+        } else if(tokens.match("IF")){ //checks for if statement
             return parseIfStmt();
-        } else if(tokens.peek("FOR")){
+        } else if(tokens.match("FOR")){ //checks for for statement
             return parseForStmt();
-        } else if(tokens.peek("RETURN")){
+        } else if(tokens.match("RETURN")){ //checks for return statement
             return parseReturnStmt();
-        } else{
+        } else{ //if it is not any of the above, then it is an expression or an assignment operation
             return parseExpressionOrAssignmentStmt();
         }
     }
 
     private Ast.Stmt.Let parseLetStmt() throws ParseException {
-        tokens.match("LET"); //skips over LET statement
+        String name = tokens.get(0).literal(); //gets the name and indexes
+        tokens.index++;
+        
+        if(tokens.match(";")){ //if it is a let statement without further defintion, return empty
+            return new Ast.Stmt.Let(name, Optional.empty());
 
-        if(tokens.get(1).literal().equals(";")){ //if there is no equals assignment
-            return new Ast.Stmt.Let(tokens.get(0).literal(), Optional.empty());
-        } else if (!tokens.has(3)){ //if there is nothing after the assignment value, then there is no semicolon
-            throw new ParseException("Missing Semicolon");
-        } else{ //otherwise, the statement was correct
-            return new Ast.Stmt.Let(tokens.get(0).literal(), Optional.of(new Ast.Expr.Variable(tokens.get(2).literal())));
+        } else if (tokens.match("=")) { //if there is an equals, parse the rest
+            if(tokens.has(1) && tokens.peek(Token.Type.IDENTIFIER)){ //gets the variable name
+                String variable = tokens.get(0).literal();
+                tokens.index++;
+
+                if(tokens.match(";")){ //gets the semicolon
+                    return new Ast.Stmt.Let(name, Optional.of(new Ast.Expr.Variable(variable)));
+                } else {
+                    throw new ParseException("Missing LET Statement Semicolon");
+                }
+
+            } else{ //missing variable name
+                throw new ParseException("Invalid LET Statement");
+            }
+
         }
-
+        return null;
     }
 
     private Ast.Stmt.Def parseDefStmt() throws ParseException {
-        tokens.match("DEF");
+        String name = tokens.get(0).literal(); //get name and index
+        tokens.index++;
 
-        if(tokens.has(2) && !tokens.get(2).literal().equals(")")){ //there is a parameter
-            return new Ast.Stmt.Def(tokens.get(0).literal(), List.of(tokens.get(2).literal()), List.of());
+        if(tokens.match("(")){ //captures parenthesis
+            List<String> arguments = new ArrayList<>();
 
-        } else{ //no parameter
-            return new Ast.Stmt.Def(tokens.get(0).literal(), List.of(), List.of());
+            if(!tokens.peek(")")){ //if there is not immediatly a closing parenthesis, capture all of the arguments in a list
+                arguments.add(tokens.get(0).literal());
+                tokens.index++;
+
+                while(tokens.match(",")){
+                    arguments.add(tokens.get(0).literal());
+                    tokens.index++;
+                }
+            }
+            if(!tokens.match(")")){
+                throw new ParseException("Expected closing parenthesis for DEF Statement");
+            }
+            if(!tokens.match("DO")){
+                throw new ParseException("Expected DO for DEF Statement");
+            }
+            if(!tokens.match("END")){
+                throw new ParseException("Expected END for DEF Statement");
+            }
+            return new Ast.Stmt.Def(name, arguments, List.of()); //return results with or without arguments
+
+        } else{
+            throw new ParseException("Invalid DEF Statement");
         }
-
     }
 
     private Ast.Stmt.If parseIfStmt() throws ParseException {
-        tokens.match("IF"); //absorb IF
+        var ifCond = parseExpr(); //captures the condition using parseExpr
 
-        if(tokens.get(4).literal().equals("ELSE")){ //if there is an else present
-            return new Ast.Stmt.If(new Ast.Expr.Variable(tokens.get(0).literal()), List.of(new Ast.Stmt.Expression(new Ast.Expr.Variable(tokens.get(2).literal()))), List.of(new Ast.Stmt.Expression(new Ast.Expr.Variable(tokens.get(5).literal()))));
-
-        } else{ //if there is just an if-statement with no else
-            return new Ast.Stmt.If(new Ast.Expr.Variable(tokens.get(0).literal()), List.of(new Ast.Stmt.Expression(new Ast.Expr.Variable(tokens.get(2).literal()))), List.of());
+        if(!tokens.match("DO")){ //
+            throw new ParseException("Missing DO in IF Statement");
         }
+        List<Ast.Stmt> ifArguments = new ArrayList<>(); //create a list for the conditions
+
+        if(!tokens.peek(";")){ //grab the semicolon
+            ifArguments.add(parseStmt());
+
+        } else{
+            throw new ParseException("Missing DO result in IF Statement");
+        }
+
+        if(tokens.get(0).literal().equals("END")){ //check to see if it is END instead of ELSE, and if so, end
+            return new Ast.Stmt.If(ifCond, ifArguments, List.of());
+        }
+
+        if(!tokens.match("ELSE")){ //if it has an else
+            throw new ParseException("Missing Else");
+        }
+
+        List<Ast.Stmt> elseArguments = new ArrayList<>(); //array for else arguments
+
+        if(!tokens.peek(";")){
+            elseArguments.add(parseStmt());
+
+        } else{
+            throw new ParseException("Missing result in ELSE Statement");
+        }
+
+        if(!tokens.match("END")){
+            throw new ParseException("Missing END in IF Statement");
+        }
+
+        return new Ast.Stmt.If(ifCond, ifArguments, elseArguments); //return
 
     }
 
     private Ast.Stmt.For parseForStmt() throws ParseException {
-        tokens.match("FOR"); //absorb for
+        String name = tokens.get(0).literal(); //grab the name and index
+        tokens.index++;
 
-        if(!tokens.get(1).literal().equals("IN")){ //if we are missing the IN in FOR IN
-            throw new ParseException("Missing IN");
-        } else{ //otherwise there will be no issues
-            return new Ast.Stmt.For(tokens.get(0).literal(), new Ast.Expr.Variable(tokens.get(2).literal()), List.of(new Ast.Stmt.Expression(new Ast.Expr.Variable(tokens.get(4).literal()))));
+        if(!tokens.match("IN")){
+            throw new ParseException("Missing IN in FOR statement");
         }
 
+        var expr = parseExpr(); //grabs the name
+
+        if(!tokens.match("DO")){
+            throw new ParseException("Missing DO in FOR statement");
+        }
+
+        var stmt = parseStmt(); //parse the statement/expression
+
+        if(!tokens.match("END")){
+            throw new ParseException("Missing END in FOR statement");
+        }
+
+        return new Ast.Stmt.For(name, expr, List.of(stmt)); //return successful FOR
     }
 
     private Ast.Stmt.Return parseReturnStmt() throws ParseException {
-        //absorb return and the semicolon that goes with it
-        tokens.match("RETURN");
+        if(!tokens.get(0).literal().equals(";")){ //if it is not just a semicolon and you are returning something of value
+            return new Ast.Stmt.Return(Optional.of(parseExpr()));
 
-        if(tokens.match(";")){ //if there is a semicolon everything is fine
+        } else { //empty return
+            tokens.index++;
+
             return new Ast.Stmt.Return(Optional.empty());
-        } else { //no semicolon instance
-            throw new ParseException("No Semicolon");
         }
-
-
     }
 
     private Ast.Stmt parseExpressionOrAssignmentStmt() throws ParseException {
-        if(tokens.has(1) && tokens.get(1).literal().equals("(")){ //it is a function
-            tokens.index++;
-            return new Ast.Stmt.Expression(parseVariableOrFunctionExpr());
+        var left = parseExpr(); //captures the left
 
-        } else if(tokens.has(1) && tokens.get(1).literal().equals(";")){ //it is a variable
-            return new Ast.Stmt.Expression(parseVariableOrFunctionExpr());
+        if(tokens.match("=")){ //if it is an assignment
+            var right = parseExpr(); //parse the right
 
-        } else if (tokens.has(1) && tokens.get(1).literal().equals("=")) { //assignment only for variable;
-            var firstValue = parseVariableOrFunctionExpr();
+            if (!tokens.match(";")) {
+                throw new ParseException("Expecting semicolon");
+            }
 
-            tokens.index += 2;
-
-            return new Ast.Stmt.Assignment(firstValue, parseVariableOrFunctionExpr());
-
-        } else if (tokens.has(1) && tokens.get(1).literal().equals(".")) {
-            tokens.match(Token.Type.IDENTIFIER);
-            var firstValue = parseVariableOrFunctionExpr();
-            tokens.index += 3;
-            return new Ast.Stmt.Assignment(firstValue, parseVariableOrFunctionExpr());
-        } else{ //if we are missing any pieces
-            throw new ParseException("Missing Semicolon");
+            return new Ast.Stmt.Assignment(left, right); //return the assignment statement
+        }
+        if (!tokens.match(";")) {
+            throw new ParseException("Expecting semicolon");
         }
 
+        return new Ast.Stmt.Expression(left); //return the expression alone
     }
 
     public Ast.Expr parseExpr() throws ParseException {
-        if (tokens.get(0).literal().equals("(")) { //if it starts with a parenthesis, it is a group
-            return parseGroupExpr();
-
-        } else if(tokens.peek("NIL") || tokens.peek("TRUE") || tokens.peek("FALSE")){ //literals that are null or true or false
-            return parseLiteralExpr();
-
-        } else if (tokens.has(1) && (tokens.get(1).literal().equals("AND") || tokens.get(1).literal().equals("OR"))) {
-            return parseLogicalExpr();
-
-        } else if(tokens.match(Token.Type.INTEGER) || tokens.match(Token.Type.DECIMAL)){ //if there is a number
-            if(tokens.peek(Token.Type.OPERATOR)){ //if there is an operator after the number
-                if (tokens.peek("*")){ //if you are supposed to multiply
-                    return parseMultiplicativeExpr();
-                } else if(tokens.peek("/")){ //if there is division
-                    return parseMultiplicativeExpr();
-                } else if (tokens.peek("+")){ //if you are supposed to add
-                    return parseAdditiveExpr();
-                } else if(tokens.peek("-")){ //if there is subtraction
-                    return parseAdditiveExpr();
-                }
-            } else { //if it is just a number
-                tokens.index -= 1; //remove the match from the else-if in order not mess up the index for literal declaration
-                return parseLiteralExpr();
-            }
-        } else if(tokens.peek(Token.Type.STRING)){ //if it is a string
-            return parseLiteralExpr();
-
-        } else if (tokens.peek(Token.Type.CHARACTER)) { //if it is a character
-            return parseLiteralExpr();
-
-        } else if(tokens.match("OBJECT")){ //object expression
-            return parseObjectExpr();
-
-        } else if(tokens.match(Token.Type.IDENTIFIER)){ //if the first token is an identifier and is lowercase
-            if(tokens.match("+")){
-                return parseAdditiveExpr();
-            } else if(tokens.match("-")){
-                return parseAdditiveExpr();
-            } else if(tokens.match("*")){
-                return parseMultiplicativeExpr();
-            } else if(tokens.match("/")){
-                return parseMultiplicativeExpr();
-            }  else{ //if it just an identifier with no math in it, then it is either a variable, a function, a property, or a method
-                return parseVariableOrFunctionExpr();
-            }
-
-        }
-        return null; //default return
+        return parseLogicalExpr(); //start the call chain with logical expression
     }
 
     private Ast.Expr parseLogicalExpr() throws ParseException {
-        throw new UnsupportedOperationException("TODO"); //TODO
+        var left = parseComparisonExpr(); //calls comparison to check
+
+        while(tokens.peek("AND") || tokens.peek("OR")){ //if there is an AND or an OR present
+            String operator = tokens.get(0).literal(); //capture the operator
+            tokens.index++;
+
+            var right = parseComparisonExpr(); //capture the right
+            left = new Ast.Expr.Binary(operator, left, right); //reassign left
+        }
+        return left; //return full
     }
 
     private Ast.Expr parseComparisonExpr() throws ParseException {
-        throw new UnsupportedOperationException("TODO"); //TODO
+        var left = parseAdditiveExpr(); //continue chain
+
+        //checks for comparisons
+        while (tokens.peek("<") || tokens.peek("<=") || tokens.peek(">") || tokens.peek(">=") || tokens.peek("==") || tokens.peek("!=")){
+            String operator = tokens.get(0).literal(); //catch the operator
+            tokens.index++;
+
+            var right = parseAdditiveExpr(); //gets the right side of the comparison
+            left = new Ast.Expr.Binary(operator, left, right); //fills expression
+        }
+
+        return left; //return
     }
 
     private Ast.Expr parseAdditiveExpr() throws ParseException {
-        tokens.index -= 1;
-        var left = parseSecondaryExpr();
+        var left = parseMultiplicativeExpr(); //continue chain
 
-        if(tokens.match("+") || tokens.match("-")){
+        while(tokens.peek("+") || tokens.peek("-")){ //checks for addition or subtraction
+            String operator = tokens.get(0).literal(); //capture symbol
+            tokens.index++;
 
-            var operator = tokens.get(-1).literal();
-            var right = parseSecondaryExpr();
-            return new Ast.Expr.Binary(operator, left, right);
+            var right = parseMultiplicativeExpr(); //parse the other side
+            left = new Ast.Expr.Binary(operator, left, right); //fix left
         }
-
-
-        return left;
+        return left; //return full value
     }
 
     private Ast.Expr parseMultiplicativeExpr() throws ParseException {
+        var left = parseSecondaryExpr(); //continue chain
 
-        tokens.index -= 1;
-        var left = parseSecondaryExpr();
+        while(tokens.peek("*") || tokens.peek("/")){ //checks for mult or division
+            String operator = tokens.get(0).literal(); //catches symbol
+            tokens.index++;
 
-        if(tokens.match("*") || tokens.match("/")){
-
-            var operator = tokens.get(-1).literal();
-            var right = parseSecondaryExpr();
-            return new Ast.Expr.Binary(operator, left, right);
+            var right = parseSecondaryExpr(); //parses the other side
+            left = new Ast.Expr.Binary(operator, left, right); //fills left
         }
-
-
-        return left;
+        return left; //return full
     }
 
     private Ast.Expr parseSecondaryExpr() throws ParseException {
-        if(!tokens.get(0).literal().equals(".")){ //if the current index is not a dot, then it is a variable coming from the binary operations
-            if(!tokens.has(2) && !tokens.has(1)) {
-                return new Ast.Expr.Variable(tokens.get(0).literal());
-            }
-            return new Ast.Expr.Variable(tokens.get(-1).literal());
-        } else if(tokens.has(2) && tokens.get(2).literal().equals("(")){ //if it has parenthesis after the method name
-            tokens.match(Token.Type.IDENTIFIER); //skip over method name
+        var expr = parsePrimaryExpr(); //continue chain
 
-            return new Ast.Expr.Method(new Ast.Expr.Variable(tokens.get(-1).literal()), tokens.get(1).literal(), List.of());
-        } else{ //if it does not have parenthesis, it has to be a property
-            return new Ast.Expr.Property(new Ast.Expr.Variable(tokens.get(-1).literal()), tokens.get(1).literal());
+        while(tokens.match(".")){
+            if(!tokens.peek(Token.Type.IDENTIFIER)){ //the next token should be a word that is a property or method
+                throw new ParseException("No Identfiier after .");
+            }
+            String name = tokens.get(0).literal(); //grabs the name and idexes
+            tokens.index++;
+            List<Ast.Expr> arguments = new ArrayList<>(); //will create an arraylist to store the arguments of the method
+
+            if(tokens.match("(")){ //checks for opening parenthesis
+
+                if(!tokens.peek(")")){ //makes sure that closing parenthesis are not right after opening parenthesis
+                    arguments.add(parseExpr());
+
+                    while(tokens.match(",")){ //will go through all of the arguments and add them to the arraylist
+                        arguments.add(parseExpr());
+                    }
+
+                }
+                if(!tokens.match(")")){ //if there is no closing parenthesis
+                    throw new ParseException("Expected ')' after arguments");
+                }
+                expr = new Ast.Expr.Method(expr, name, arguments); //stores all of the information as a method
+
+            } else{ //if no opening parenthesis, then it is a property
+                expr = new Ast.Expr.Property(expr, name);
+            }
         }
+        return expr; //return expression
 
     }
 
     private Ast.Expr parsePrimaryExpr() throws ParseException {
-        while(tokens.has(1)){
-            if (tokens.peek("AND") || tokens.peek("OR")){
-                return new Ast.Expr.Literal(true);
-            } else if (tokens.peek("<") || tokens.peek("<=") || tokens.peek(">") ||
-                    tokens.peek(">=") || tokens.peek("==") || tokens.peek("!=")) {
-                return new Ast.Expr.Binary(tokens.get(1).literal(), new Ast.Expr.Variable("left"), new Ast.Expr.Variable("right"));
-            }
-            tokens.index++;
+        if(tokens.match("NIL")){ //if there is null
+            return new Ast.Expr.Literal(null);
+
+        } else if (tokens.match("TRUE")) { //if there is a true
+            return new Ast.Expr.Literal(true);
+
+        } else if (tokens.match("FALSE")) { //if there is a false
+            return new Ast.Expr.Literal(false);
+
+        //if there is an integer, character, or string, then it is a literal
+        } else if ((tokens.peek(Token.Type.INTEGER) || tokens.peek(Token.Type.DECIMAL)) || tokens.peek(Token.Type.CHARACTER)|| tokens.peek(Token.Type.STRING)) {
+            return parseLiteralExpr();
+
+        } else if (tokens.peek("(")) { //if there is a parenthesis, then it is a group
+            return parseGroupExpr();
+
+        } else if (tokens.match("OBJECT")) { //if it says it is an object, then it is a statement and should be redirected
+            return parseObjectExpr();
+
+        } else if (tokens.peek(Token.Type.IDENTIFIER)) { //if it is an identifier, then it is redirected
+            return parseVariableOrFunctionExpr();
+
         }
-        return new Ast.Expr.Literal(false);
+        throw new ParseException("Unexpected token: " + tokens.get(0).literal());
+
     }
 
     private Ast.Expr.Literal parseLiteralExpr() throws ParseException {
-        if(tokens.match("NIL")){ //if it is null, return null
-            return new Ast.Expr.Literal(null);
+        Token currentToken = tokens.get(0); //gets the current token information and indexes
+        tokens.index++;
 
-        } else if (tokens.match("TRUE")) { //if it is true, return true
-            return new Ast.Expr.Literal(true);
+        String currentTokenVal = currentToken.literal(); //gets the literal
+        Object value; //will create an empty object to store the literal value
 
-        } else if (tokens.match("FALSE")) {//if it is false, return false
-            return new Ast.Expr.Literal(false);
+        if(currentToken.type() == Token.Type.DECIMAL || currentToken.type() == Token.Type.INTEGER){ //if the literal is numerical
 
-        } else if (tokens.peek(Token.Type.INTEGER)) { //if it is a literal integer, there is nothing after it so return the number as an integer
-            return new Ast.Expr.Literal(new BigInteger(tokens.get(0).literal()));
+            if(currentTokenVal.contains(".") || currentTokenVal.toLowerCase().contains("e")){ //if there is a number that has a decimal or e, it is a decimal
+                value = new BigDecimal(currentTokenVal);
 
-        } else if (tokens.peek(Token.Type.DECIMAL)) {//if it is a literal decimal, then nothing is after it so return that
-            return new Ast.Expr.Literal(new BigDecimal(tokens.get(0).literal()));
+            } else{ //otherwise it is an integer
+                value = new BigInteger(currentTokenVal);
 
-        } else if (tokens.peek(Token.Type.CHARACTER)) { //return character without quotes
-            return new Ast.Expr.Literal(tokens.get(0).literal().charAt(1));
-
-        } else if (tokens.peek(Token.Type.STRING)) {
-            //will replace all escape characters
-            if (tokens.get(0).literal().contains("\\n")){
-                return new Ast.Expr.Literal(tokens.get(0).literal().replace("\\n", "\n").replace("\"", ""));
-            } else if(tokens.get(0).literal().contains("\\r")){
-                return new Ast.Expr.Literal(tokens.get(0).literal().replace("\\r", "\r").replace("\"", ""));
-            } else if(tokens.get(0).literal().contains("\\t")){
-                return new Ast.Expr.Literal(tokens.get(0).literal().replace("\\t", "\t").replace("\"", ""));
-            } else if(tokens.get(0).literal().contains("\\b")){
-                return new Ast.Expr.Literal(tokens.get(0).literal().replace("\\b", "\b").replace("\"", ""));
-            } else if(tokens.get(0).literal().contains("\\f")){
-                return new Ast.Expr.Literal(tokens.get(0).literal().replace("\\f", "\f").replace("\"", ""));
-            } else{ //if there are no escape characters, return the string as is without quotes
-                return new Ast.Expr.Literal(tokens.get(0).literal().substring(1, tokens.get(0).literal().length() - 1));
             }
+        } else if (currentToken.type() == Token.Type.CHARACTER) { //if it is a character, get the character and store it in value
+            value = currentTokenVal.charAt(1);
 
+        } else if (currentToken.type() == Token.Type.STRING) {
+            //will replace all escape characters
+            if (currentTokenVal.contains("\\n")){
+                value = currentTokenVal.replace("\\n", "\n").replace("\"", "");
+            } else if(currentTokenVal.contains("\\r")){
+                value = currentTokenVal.replace("\\r", "\r").replace("\"", "");
+            } else if(currentTokenVal.contains("\\t")){
+                value = currentTokenVal.replace("\\t", "\t").replace("\"", "");
+            } else if(currentTokenVal.contains("\\b")){
+                value = currentTokenVal.replace("\\b", "\b").replace("\"", "");
+            } else if(currentTokenVal.contains("\\f")){
+                value = currentTokenVal.replace("\\f", "\f").replace("\"", "");
+            } else{ //if there are no escape characters, return the string as is without quotes
+                value = currentTokenVal.substring(1, currentTokenVal.length() - 1);
+            }
+        } else {
+            throw new ParseException("Invalid literal: " + currentTokenVal);
         }
-
-        return null;
+        return new Ast.Expr.Literal(value); //return the value
     }
 
     private Ast.Expr.Group parseGroupExpr() throws ParseException {
-        return new Ast.Expr.Group(new Ast.Expr.Variable(tokens.get(1).literal()));
+        if(!tokens.match("(")){ //opening parenthesis check
+            throw new ParseException("Missing opening parenthesis for group");
+        }
+        var expr = parseExpr(); //parses
+
+        if(!tokens.match(")")){ //closing parenthesis check
+            throw new ParseException("No closing parenthesis for group");
+        }
+
+        return new Ast.Expr.Group(expr); //return group
     }
 
     private Ast.Expr.ObjectExpr parseObjectExpr() throws ParseException {
-        if(!tokens.match("DO")){ //runs if the DO in OBJECT DO is missing
-            throw new ParseException("Missing DO");
-
-        } else if(tokens.peek("LET")){ //checks to see if it is a LET statement
-            return new Ast.Expr.ObjectExpr(Optional.empty(),List.of(parseLetStmt()), List.of());
-
-        } else if(tokens.peek("DEF")){ //checks to see if it is a DEF statement
-            return new Ast.Expr.ObjectExpr(Optional.empty(),List.of(), List.of(parseDefStmt()));
-
-        } else{ //if any of these do not apply, then it is not a correct usage of Object
-            throw new ParseException("Not a valid use of Object");
+        if(!tokens.match("DO")){ //checks for DO
+            throw new ParseException("Missing DO in OBJECT declaration");
         }
+
+        if (tokens.match("DEF")){ //checks for DEF statement and runs method
+            return new Ast.Expr.ObjectExpr(Optional.empty(), List.of(), List.of(parseDefStmt()));
+
+        } else{ //checks for LET statement and runs method
+            tokens.match("LET");
+            return new Ast.Expr.ObjectExpr(Optional.empty(), List.of(parseLetStmt()), List.of());
+        }
+
     }
 
     private Ast.Expr parseVariableOrFunctionExpr() throws ParseException {
-        if(!tokens.has(1)){ //if there is nothing after this, then it is a variable
-            return new Ast.Expr.Variable(tokens.get(-1).literal());
-        } else if (tokens.get(1).literal().equals(";") || tokens.get(1).literal().equals("=")) { //coming from expression
-            return new Ast.Expr.Variable(tokens.get(0).literal());
-        } else if(tokens.match("(")){ //if there is a parenthesis directly after, it is a function
-            if(tokens.peek(Token.Type.IDENTIFIER)){ //if the function has parameters
-                return new Ast.Expr.Function(tokens.get(-2).literal(), List.of(new Ast.Expr.Variable(tokens.get(0).literal())));
-            } else{ //if the function has no parameters
-                return new Ast.Expr.Function(tokens.get(-2).literal(), List.of());
-            }
-        } else { //else it has a dot in it, so we will use secondary expression to determine if it is a property or a method
-            return parseSecondaryExpr();
+        if(!tokens.peek(Token.Type.IDENTIFIER)){ //if not an identifier, then it is not a function or variable
+            throw new ParseException("Expected identifier");
         }
+        String name = tokens.get(0).literal(); //gets the name and indexes
+        tokens.index++;
+
+        if(tokens.match("(")){ //checks for parenthesis
+            List<Ast.Expr> arguments = new ArrayList<>(); //for arguments
+
+            if(!tokens.peek(")")){ //gets all arguments
+                arguments.add(parseExpr());
+
+                while(tokens.match(",")){
+                    arguments.add(parseExpr());
+                }
+            }
+            if(!tokens.match(")")){ //closing parenthesis check
+                throw new ParseException("Expected closing parenthesis after function call");
+            }
+            return new Ast.Expr.Function(name, arguments); //return with arguments
+        }
+        return new Ast.Expr.Variable(name); //return without arguments
 
     }
 
