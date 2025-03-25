@@ -35,7 +35,7 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
 
     @Override
     public RuntimeValue visit(Ast.Stmt.Let ast) throws EvaluateException {
-        if (scope.get(ast.name(), true).isPresent()) { // Check if name is already defined in current scope
+        /*if (scope.get(ast.name(), true).isPresent()) { // Check if name is already defined in current scope
             throw new EvaluateException("Variable '" + ast.name() + "' is already defined in current scope");
         }
 
@@ -43,12 +43,27 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
         RuntimeValue value = ast.value().isPresent() ? visit(ast.value().get()) : new RuntimeValue.Primitive(null);
         scope.define(ast.name(), value);
 
+        return value; // Return the value for REPL/testing*/
+
+        // Modify the check to ensure proper scoping behavior
+        if (scope.get(ast.name(), true).isPresent()) {
+            throw new EvaluateException("Variable '" + ast.name() + "' is already defined in current scope");
+        }
+
+        // Define the variable with initial value (or NIL if no value present)
+        RuntimeValue value = ast.value().isPresent() ?
+                visit(ast.value().get()) :
+                new RuntimeValue.Primitive(null);
+
+        // Define the variable in the current scope
+        scope.define(ast.name(), value);
+
         return value; // Return the value for REPL/testing
     }
 
     @Override
     public RuntimeValue visit(Ast.Stmt.Def ast) throws EvaluateException {
-        if (scope.get(ast.name(), true).isPresent()) { // Ensure name is not already defined in current scope
+        if (scope.get(ast.name(), true).isPresent()) {
             throw new EvaluateException("Function '" + ast.name() + "' is already defined in current scope");
         }
 
@@ -68,7 +83,7 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
         // Create function definition
         RuntimeValue.Function function = new RuntimeValue.Function(ast.name(), arguments -> {
             // Verify argument count
-            if (arguments.size() != ast.body().size()) {
+            if (arguments.size() != ast.parameters().size()) {
                 throw new EvaluateException("Expected " + ast.parameters().size() +
                         " arguments but got " + arguments.size());
             }
@@ -87,15 +102,22 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
 
                 // Evaluate function body
                 RuntimeValue result = new RuntimeValue.Primitive(null); // Default return value is NIL
-                try {
-                    for (Ast.Stmt stmt : ast.body()) {
+                for (Ast.Stmt stmt : ast.body()) {
+                    try {
                         result = visit(stmt);
+                    } catch (EvaluateException e) {
+                        // If this is a return statement, extract the return value
+                        if (e.getMessage() != null) {
+                            // Ensure we're not double-wrapping
+                            Object returnVal = e.getMessage();
+                            return returnVal instanceof RuntimeValue.Primitive primitive ?
+                                    primitive : new RuntimeValue.Primitive(returnVal);
+                        }
+                        // If no message, return NIL
+                        return new RuntimeValue.Primitive(null);
                     }
-                    return result;
-                } catch (EvaluateException e) {
-                    // Handle RETURN inside the function
-                    return result;
                 }
+                return new RuntimeValue.Primitive(null); // Ensure NIL is returned
             } finally {
                 // Restore original scope, even if an exception occurred
                 this.scope = originalScope;
@@ -105,8 +127,8 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
         // Define the function in the current scope
         scope.define(ast.name(), function);
 
-        // Return the function value for REPL/testing
-        return function;
+        // Return NIL
+        return new RuntimeValue.Primitive(null);
     }
 
     @Override
@@ -179,8 +201,12 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
         // Evaluate the return value (or use NIL if not present)
         RuntimeValue value = ast.value().isPresent() ? visit(ast.value().get()) : new RuntimeValue.Primitive(null);
 
+        // If the value is already a Primitive, extract its actual value
+        Object returnValue = value instanceof RuntimeValue.Primitive primitive ?
+                primitive.value() : value;
+
         // Throw exception to change control flow
-        throw new EvaluateException("" + value);
+        throw new EvaluateException("" + returnValue);
     }
 
     @Override
@@ -455,7 +481,7 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
 
     @Override
     public RuntimeValue visit(Ast.Expr.Function ast) throws EvaluateException {
-        Optional<RuntimeValue> functionObj = scope.get(ast.name(), false); // Get function from scope
+        /*Optional<RuntimeValue> functionObj = scope.get(ast.name(), false); // Get function from scope
 
         if (functionObj.isEmpty()) { // Check to see if function is defined
             throw new EvaluateException("Function '" + ast.name() + "' is not defined");
@@ -479,7 +505,34 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
         } catch (EvaluateException e) { // If there was an error in invoking the function
             throw new EvaluateException("Error invoking function '" + ast.name() + "': " + e.getMessage());
 
+        }*/
+
+        Optional<RuntimeValue> functionObj = scope.get(ast.name(), false); // Get function from scope
+
+        if (functionObj.isEmpty()) { // Check to see if function is defined
+            throw new EvaluateException("Function '" + ast.name() + "' is not defined");
         }
+
+        if (!(functionObj.get() instanceof RuntimeValue.Function function)) { // Check to see if value is a Function
+            throw new EvaluateException("'" + ast.name() + "' is not a function");
+        }
+
+        // Evaluate all arguments sequentially
+        List<RuntimeValue> arguments = new ArrayList<>();
+        for (Ast.Expr arg : ast.arguments()) {
+            RuntimeValue argValue = visit(arg);
+            arguments.add(argValue);
+        }
+
+        try {
+            // Invoke the function with arguments
+            RuntimeValue result = function.definition().invoke(arguments);
+            return result;
+        } catch (EvaluateException e) {
+            // Improve error handling to provide more context
+            throw new EvaluateException("Error invoking function '" + ast.name() + "': " + e.getMessage());
+        }
+
     }
 
     @Override
@@ -525,9 +578,106 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
     }
 
     @Override
-    //TODO ObjectExpr needs more work to finish test cases
     public RuntimeValue visit(Ast.Expr.ObjectExpr ast) throws EvaluateException {
         // Create a new scope as child of current scope
+        Scope objectScope = new Scope(this.scope);
+
+        // Create the object with the new scope
+        RuntimeValue.ObjectValue object = new RuntimeValue.ObjectValue(ast.name(), objectScope);
+
+        // Process fields
+        for (var field : ast.fields()) {
+            // Ensure field name is not already defined
+            if (objectScope.get(field.name(), true).isPresent()) {
+                throw new EvaluateException("Field '" + field.name() + "' is already defined in object");
+            }
+
+            // Evaluate field value if present, otherwise use NIL
+            RuntimeValue value = field.value().isPresent() ?
+                    visit(field.value().get()) :
+                    new RuntimeValue.Primitive(null);
+
+            // Define field in object's scope
+            objectScope.define(field.name(), value);
+        }
+
+        // Process methods
+        for (var method : ast.methods()) {
+            // Ensure method name is not already defined
+            if (objectScope.get(method.name(), true).isPresent()) {
+                throw new EvaluateException("Method '" + method.name() + "' is already defined in object");
+            }
+
+            // Ensure parameter names are unique
+            List<String> params = method.parameters();
+            for (int i = 0; i < params.size(); i++) {
+                for (int j = i + 1; j < params.size(); j++) {
+                    if (params.get(i).equals(params.get(j))) {
+                        throw new EvaluateException("Duplicate parameter name: " + params.get(i));
+                    }
+                }
+            }
+
+            // Capture current scope for static scoping
+            Scope capturedScope = this.scope;
+
+            // Create method definition
+            RuntimeValue.Function function = new RuntimeValue.Function(method.name(), arguments -> {
+                // Verify argument count (including receiver)
+                if (arguments.size() != method.parameters().size() + 1) {
+                    throw new EvaluateException("Expected " + (method.parameters().size() + 1) +
+                            " arguments but got " + arguments.size());
+                }
+
+                // Store original scope for restoration
+                Scope originalScope = this.scope;
+
+                try {
+                    // Create new scope as child of captured scope (static scoping)
+                    this.scope = new Scope(capturedScope);
+
+                    // Define 'this' variable as the method receiver (first argument)
+                    scope.define("this", arguments.get(0));
+
+                    // Define parameters with argument values (skip first argument which is the receiver)
+                    for (int i = 0; i < method.parameters().size(); i++) {
+                        scope.define(method.parameters().get(i), arguments.get(i + 1));
+                    }
+
+                    // Evaluate method body
+                    RuntimeValue result = new RuntimeValue.Primitive(null); // Default return value is NIL
+                    for (Ast.Stmt stmt : method.body()) {
+                        try {
+                            result = visit(stmt);
+
+                        } catch (EvaluateException e) {
+                            // If this is a return statement, extract the return value
+                            if (e.getMessage() != null) {
+                                // Ensure we're not double-wrapping
+                                Object returnVal = e.getMessage();
+                                return returnVal instanceof RuntimeValue.Primitive primitive ?
+                                        new RuntimeValue.Primitive(primitive.value()) :
+                                        (returnVal instanceof RuntimeValue ? (RuntimeValue)returnVal : new RuntimeValue.Primitive(returnVal));
+                            }
+                            // If no message, return NIL
+                            return new RuntimeValue.Primitive(null);
+                        }
+                    }
+                    return result instanceof RuntimeValue.Primitive primitive ?
+                            new RuntimeValue.Primitive(primitive.value()) :
+                            (result instanceof RuntimeValue ? result : new RuntimeValue.Primitive(null));
+                } finally {
+                    // Restore original scope, even if an exception occurred
+                    this.scope = originalScope;
+                }
+            });
+
+            // Define the method in object's scope
+            objectScope.define(method.name(), function);
+        }
+
+        return object;
+        /*// Create a new scope as child of current scope
         Scope objectScope = new Scope(this.scope);
 
         // Create the object with the new scope
@@ -613,7 +763,7 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
             objectScope.define(method.name(), function);
         }
 
-        return object;
+        return object;*/
     }
 
     /**
