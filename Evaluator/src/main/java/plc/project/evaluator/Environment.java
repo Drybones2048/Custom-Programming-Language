@@ -1,5 +1,6 @@
 package plc.project.evaluator;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -40,8 +41,41 @@ public final class Environment {
         return new RuntimeValue.Primitive(arguments);
     }
 
-    private static RuntimeValue range(List<RuntimeValue> arguments) {
-        throw new UnsupportedOperationException("TODO"); //TODO
+    private static RuntimeValue range(List<RuntimeValue> arguments) throws EvaluateException {
+        if (arguments.size() != 2) { // Check that exactly two arguments are provided
+            throw new EvaluateException("range function expects exactly 2 arguments");
+
+        }
+
+        // Extract and validate the start argument
+        RuntimeValue startValue = arguments.get(0);
+        if (!(startValue instanceof RuntimeValue.Primitive primitive) ||
+                !(primitive.value() instanceof java.math.BigInteger start)) {
+            throw new EvaluateException("First argument to range must be an integer");
+
+        }
+
+        // Extract and validate the end argument
+        RuntimeValue endValue = arguments.get(1);
+        if (!(endValue instanceof RuntimeValue.Primitive primitive2) ||
+                !(primitive2.value() instanceof java.math.BigInteger end)) {
+            throw new EvaluateException("Second argument to range must be an integer");
+
+        }
+
+        // Check that start is less than or equal to end
+        if (start.compareTo(end) > 0) {
+            throw new EvaluateException("Start value must be less than or equal to end value");
+
+        }
+
+        // Create the list of integers from start (inclusive) to end (exclusive)
+        List<RuntimeValue> rangeList = new ArrayList<>();
+        for (java.math.BigInteger i = start; i.compareTo(end) < 0; i = i.add(java.math.BigInteger.ONE)) {
+            rangeList.add(new RuntimeValue.Primitive(i));
+        }
+
+        return new RuntimeValue.Primitive(rangeList);
     }
 
     private static RuntimeValue function(List<RuntimeValue> arguments) {
