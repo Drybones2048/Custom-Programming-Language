@@ -23,218 +23,300 @@ public final class Lexer {
     }
 
     public List<Token> lex() throws LexException {
-        List<Token> tokens = new ArrayList<>(); //creates an array list that will keep track of the tokens
+        List<Token> tokens = new ArrayList<>(); // Creates an array list that will keep track of the tokens
+
         while (chars.has(0)) {
+            skipWhitespaceAndComments();
+            if (!chars.has(0)) {
+                break; // End of input after skipping whitespace/comments
+
+            }
+
             Token token = lexToken();  // Get the next token
             if (token != null) {
                 tokens.add(token);
+
             }
         }
         return tokens;
+
     }
 
-    private void lexComment() {
-        chars.match("//"); //grabs the opening double slash
-        while (chars.has(0) && !chars.peek("\n")) { //allows anything to go through except newline characters
+
+    private void skipWhitespaceAndComments() throws LexException { // Skips any whitespace or comments in the character stream
+        while (chars.has(0)) { // Check for whitespace characters
+            if (chars.peek("[ \b\n\r\t]")) {
+                chars.match("[ \b\n\r\t]");
+                chars.emit(); // Clear the whitespace character
+                continue;
+            }
+
+            if (chars.has(1) && chars.peek("/", "/")) { // Check for comments
+                skipComment();
+                continue;
+            }
+
+            // If not whitespace or comment, exit the loop
+            break;
+        }
+    }
+
+    private void skipComment() {
+        // Skip the '//' comment markers
+        chars.match("/");
+        chars.match("/");
+        chars.emit(); // Clear the comment markers
+
+        while (chars.has(0) && !chars.peek("[\n\r]")) { // Skip characters until end of line or end of input
             chars.match(".");
         }
-        chars.match("\n");  // Skip newline character
+
+        if (chars.has(0) && chars.peek("[\n\r]")) { // Skip the newline if present
+            chars.match(".");
+        }
+
+        chars.emit(); // Clear the comment content
     }
 
+
     private Token lexToken() throws LexException{
-        if (chars.peek(" ") || chars.peek("\n")) { //ignores whitespace
-            chars.match(" ");
-            chars.match("\n");
-            chars.emit();
-            return null;
+        if (!chars.has(0)) {
+            throw new LexException("Reached end of input");
+
         }
 
-        if (chars.peek("/")) { //calls the comment lexer and ignores them
-            lexComment();
-            return null;
-        }
-
-        if (chars.peek("[A-Za-z_]")) { //will handle most of the words outside of strings
+        // Identify token type and delegate to appropriate method
+        if (chars.peek("[A-Za-z_]")) {
             return lexIdentifier();
-        }
 
-        if (chars.peek("[0-9]") || chars.peek("[+-]")) { //anything starting with a digit is designated as a number
+        } else if (chars.peek("[0-9]")) {
             return lexNumber();
-        }
 
-        if (chars.peek("'")) { //anything that starts with a single quote will be marked as a char
+        } else if (chars.peek("[+\\-]") && chars.has(1) && chars.peek("[+\\-]", "[0-9]")) {
+            return lexNumber();
+
+        } else if (chars.peek("'")) {
             return lexCharacter();
-        }
 
-        if (chars.peek("\"")) { //anything marked with a double quote will be marked as a string
+        } else if (chars.peek("\"")) {
             return lexString();
-        }
 
-        if (chars.peek("[;.<>!=()]")) { //all the rest of the symbols will be put here
+        } else {
             return lexOperator();
-        }
 
-        throw new LexException("Invalid character: " + chars.peek());
+        }
     }
 
     private Token lexIdentifier() {
-        //[A-Za-z_] [A-Za-z0-9_-]*
         StringBuilder builder = new StringBuilder();
-        builder.append(chars.emit());  //grabs the first character
 
-        while (chars.has(0) && chars.match("[A-Za-z0-9_-]")) { //grabs the remaining characters
+        if (chars.match("[A-Za-z_]")) { // First character must be letter or underscore
             builder.append(chars.emit());
         }
 
-        String identifier = builder.toString();
-        return new Token(Token.Type.IDENTIFIER, identifier); //return
+        while (chars.has(0) && chars.peek("[A-Za-z0-9_\\-]")) { // Subsequent characters can include digits and hyphens
+            chars.match(".");
+            builder.append(chars.emit());
+        }
+
+        return new Token(Token.Type.IDENTIFIER, builder.toString());
     }
 
     private Token lexNumber() {
         StringBuilder builder = new StringBuilder();
-        boolean isDecimal = false; //will be helpful in controling control flow based on if the number has a decimal
-        if (chars.peek("[+-]")) { //captures optional sign
-            chars.match("[+-]");
+        boolean isDecimal = false;
 
-            if(!chars.peek("[0-9]")){ //if the + or - sign is used as an operator instead, redirect
-                builder.append(chars.emit());
-                return new Token(Token.Type.OPERATOR, builder.toString());
-            }
-        }
-
-        while (chars.has(0) && chars.peek("[0-9]")) { //captures number in between sign
-            chars.match("[0-9]");
+        if (chars.peek("[+\\-]")) { // Handle optional sign
+            chars.match(".");
             builder.append(chars.emit());
+
+        }
+
+        while (chars.has(0) && chars.peek("[0-9]")) { // Digits before decimal point
+            chars.match(".");
+            builder.append(chars.emit());
+
         }
 
 
-        if (chars.peek("\\.")) { //checks if there is a decimal
-            isDecimal = true; //marks the number as being a decimal
-
+        if (chars.has(0) && chars.peek("\\.")) { // Handle decimal point and following digits
             chars.match("\\.");
             builder.append(chars.emit());
 
-            if(!chars.match("[0-9]")){ //if there is no number after the decimal point
-                builder.deleteCharAt(builder.length() - 1); //invalid decimal, so separate the int and the dot
-                chars.index -= 1; //decriment the index
-                isDecimal = false; //not a decimal anymore
-            }
+            if (chars.has(0) && chars.peek("[0-9]")) {
+                isDecimal = true;
 
-            while (chars.has(0) && chars.match("[0-9]")) { //captures the numbers after the decimal point
-                builder.append(chars.emit());
+                while (chars.has(0) && chars.peek("[0-9]")) {
+                    chars.match(".");
+                    builder.append(chars.emit());
+
+                }
+            } else {
+                // No digits after decimal point - it's an INTEGER followed by a dot operator
+                String value = builder.substring(0, builder.length() - 1);
+                chars.index--; // backtrack to the dot
+                return new Token(Token.Type.INTEGER, value);
             }
         }
 
+        // Handle exponent notation
+        if (chars.has(0) && chars.peek("[eE]")) {
+            // Save the current state before processing the exponent
+            int savedIndex = chars.index;
+            int savedLength = builder.length();
 
-        if (chars.peek("[eE]")) { //checks if there is an exponent
-            chars.match("[eE]");
+            chars.match(".");
             builder.append(chars.emit());
 
-            if (chars.match("[+-]")) { //checks if there is a sign
-                chars.match("[+-]");
+            if (chars.has(0) && chars.peek("[+\\-]")) { // Check for optional sign in exponent
+                chars.match(".");
                 builder.append(chars.emit());
             }
-            if(!chars.match("[0-9]")){ //if there is a missing exponent
-                builder.deleteCharAt(builder.length() - 1); //deletes the e that was added
-                chars.index -= 1; //decriments the index so that e can be evaluated as an operator
-            }
-            while (chars.has(0) && chars.match("[0-9]")) { //capture all the numbers in the decimal
-                builder.append(chars.emit());
-            }
-        }
-        builder.append(chars.emit()); //add the number
-        String number = builder.toString();
 
-        if(isDecimal){ //if number is marked as a decimal, return it as such
-            return new Token(Token.Type.DECIMAL, number);
-        } else{ //otherwise, it is an integer
-            return new Token(Token.Type.INTEGER, number);
+            if (chars.has(0) && chars.peek("[0-9]")) { // Check for digits in exponent
+                // We have digits after 'e', so this is a valid exponent
+                while (chars.has(0) && chars.peek("[0-9]")) {
+                    chars.match(".");
+                    builder.append(chars.emit());
+                }
+
+                // The presence of 'e' followed by digits makes this a DECIMAL only if
+                // there was already a decimal point
+                // Otherwise it remains an INTEGER
+            } else {
+                // No digits after 'e', so this is not a valid exponent
+                // Revert to before the 'e' and return what we have so far
+                chars.index = savedIndex;
+                String value = builder.substring(0, savedLength);
+                return new Token(isDecimal ? Token.Type.DECIMAL : Token.Type.INTEGER, value);
+            }
         }
+
+        Token.Type type = isDecimal ? Token.Type.DECIMAL : Token.Type.INTEGER;
+        return new Token(type, builder.toString());
     }
 
     private Token lexCharacter() throws LexException{
-            chars.match("'"); //cleans up opening single quote
+        // Match opening quote
+        chars.match("'");
+        String openQuote = chars.emit();
 
-            StringBuilder builder = new StringBuilder();
-            if (chars.match("[^'\\n\\r]")) {  // Match any valid character (not a single quote or newline)
-                while(chars.match("[\\'nr]")){
-                    builder.append(chars.emit());
+        StringBuilder builder = new StringBuilder(openQuote);
+
+        // Handle character content (regular char or escape sequence)
+        if (chars.has(0)) {
+            if (chars.peek("\\\\")) {
+                // Escape sequence
+                chars.match("\\\\");
+                String escapeSlash = chars.emit();
+
+                if (chars.has(0) && chars.peek("[bnrt'\"\\\\]")) {
+                    chars.match(".");
+                    String escapeChar = chars.emit();
+                    builder.append(escapeSlash).append(escapeChar);
+
+                } else {
+                    throw new LexException("Invalid escape sequence");
+
                 }
-            } else if (chars.match("\\")) {  // Match escape sequences
-                lexEscape();  // Delegate to lexEscape for handling escape sequences
+            } else if (!chars.peek("'") && !chars.peek("[\n\r]")) {
+                // Regular character (not quote, newline, or return)
+                chars.match(".");
                 builder.append(chars.emit());
-            } else {
-                throw new LexException("Invalid character literal: " + chars.peek());
-            }
 
-            chars.match("'"); //add the final single quote
+            } else if (chars.peek("[\n\r]")) {
+                throw new LexException("Unterminated character literal");
+
+            } else {
+                throw new LexException("Empty character literal");
+
+            }
+        } else {
+            throw new LexException("Unterminated character literal");
+
+        }
+
+        if (chars.has(0) && chars.peek("'")) { // Match closing quote
+            chars.match("'");
             builder.append(chars.emit());
 
-            if (builder.charAt(chars.index - 1) != '\'') { //make sure that there is a closing quote
-                throw new LexException("Unterminated character literal");
-            }
+        } else {
+            throw new LexException("Unterminated character literal");
 
-           return new Token(Token.Type.CHARACTER, builder.toString()); //return
+        }
+
+        return new Token(Token.Type.CHARACTER, builder.toString());
     }
 
     private Token lexString() throws LexException{
-        StringBuilder builder = new StringBuilder();
-        chars.match("\""); //gets open quote
-        builder.append(chars.emit());
+        // Match opening quote
+        chars.match("\"");
+        String openQuote = chars.emit();
 
-        while (chars.has(0) && !chars.peek("\"")) {  // Keeps going until hitting the closing double quote
-            if (!chars.peek("\\\\")) {  // This will add all non escape characters
-                chars.match(Character.toString(chars.input.charAt(chars.index))); //long command that adds the current symbol to match
+        StringBuilder builder = new StringBuilder(openQuote);
+
+        // Read string content until closing quote or error
+        while (chars.has(0) && !chars.peek("\"") && !chars.peek("[\n\r]")) {
+            if (chars.peek("\\\\")) {
+                // Handle escape sequence
+                chars.match("\\\\");
+                String escapeSlash = chars.emit();
+
+                if (chars.has(0) && chars.peek("[bnrt'\"\\\\]")) {
+                    chars.match(".");
+                    String escapeChar = chars.emit();
+                    builder.append(escapeSlash).append(escapeChar);
+
+                } else {
+                    throw new LexException("Invalid escape sequence");
+
+                }
+            } else {
+                // Handle regular character
+                chars.match(".");
                 builder.append(chars.emit());
 
-            } else if (chars.peek("[\\\\]") && chars.has(1)) {  //used to handle escape commands
-                lexEscape();
-                builder.append("\\");
-                builder.append(chars.emit());
-            } else { //will throw an error if there is a literal that cannot be used as a string
-                throw new LexException("Invalid String literal");
             }
+        }
+
+        // Check for unterminated string
+        if (!chars.has(0) || chars.peek("[\n\r]")) {
+            throw new LexException("Unterminated string literal");
 
         }
 
-        chars.match("\""); //tries to catch closing quotes if there are any
+        // Match closing quote
+        chars.match("\"");
         builder.append(chars.emit());
 
-        try{
-            if (builder.charAt(chars.index - 1) != '\"') { //checks to make sure it has closing quotes
-                throw new LexException("Unterminated string literal");
-            }
-        } catch(StringIndexOutOfBoundsException e){
-            //If it is a long string we will get an out of bounds error, this is to correct this
-        }
+        return new Token(Token.Type.STRING, builder.toString());
 
-        return new Token(Token.Type.STRING, builder.toString()); //return
     }
 
     private void lexEscape() throws LexException {
-        chars.match("\\\\"); //matches escape
+        chars.match("\\\\"); // Matches escape
 
-        if (chars.peek("[bnrt'\"\\\\]")) { //checks if the escape sequence is valid
+        if (chars.peek("[bnrt'\"\\\\]")) { // Checks if the escape sequence is valid
             chars.emit();  // Capture the escape character
+
         } else {
             throw new LexException("Invalid escape sequence: " + chars.peek());
+
         }
     }
 
     public Token lexOperator() {
         StringBuilder builder = new StringBuilder();
 
-        while (chars.has(0) && !chars.peek("[A-Za-z0-9]")) { //while we are going through, make sure we are operating on symbols
-            if(builder.toString().equals("=") && !chars.peek("[><!=+*/-]")){ //checks to see if the symbol is just a lone equals
-                return new Token(Token.Type.OPERATOR, builder.toString());
-            }
-            //checks to see if the equals sign is a combo with another symbol
-            if(builder.toString().equals("<=") || builder.toString().equals("=>") || builder.toString().equals("==") || builder.toString().equals("!=") || builder.toString().equals("-=") || builder.toString().equals("+=") || builder.toString().equals("*=") || builder.toString().equals("/=") || builder.toString().equals("(") || builder.toString().equals(")")){
-                return new Token(Token.Type.OPERATOR, builder.toString());
-            }
+        // Match first character of operator
+        chars.match(".");
+        builder.append(chars.emit());
 
-            chars.match("[;$^!=?()<==>*+-.]"); //otherwise, keep going with adding the other symbols
+        // Handle compound operators like <= >= == !=
+        if (builder.toString().matches("[<>!=]") && chars.has(0) && chars.peek("=")) {
+            chars.match("=");
             builder.append(chars.emit());
+
         }
 
         return new Token(Token.Type.OPERATOR, builder.toString());
